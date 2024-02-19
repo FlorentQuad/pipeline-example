@@ -1,0 +1,296 @@
+apiVersion: v1
+items:
+- apiVersion: tekton.dev/v1beta1
+  kind: Pipeline
+  metadata:
+    labels:
+      template: demo-tuesday
+    name: demo-tuesday
+  spec:
+    finally:
+    - name: final
+      taskSpec:
+        steps:
+        - image: image-registry.openshift-image-registry.svc:5000/openshift/cli
+          script: |
+            #!/usr/bin/env bash
+
+            echo "Everything Finished"
+    params:
+    - name: git-url
+      type: string
+    - name: git-branch
+      type: string
+    tasks:
+    - name: fetch-repo
+      params:
+      - name: url
+        value: $(params.git-url)
+      - name: revision
+        value: $(params.git-branch)
+      taskRef:
+        name: git-clone
+      workspaces:
+      - name: output
+        workspace: code-clone
+    - name: test-build
+      runAfter:
+      - fetch-repo
+      taskSpec:
+        steps:
+        - image: image-registry.openshift-image-registry.svc:5000/openshift/cli
+          name: test
+          script: |
+            #!/usr/bin/env bash
+            echo "---- Run Tests  ----"
+            cat /workspace/source/index.php
+            echo "---- Finished Tests ----"
+        - image: image-registry.openshift-image-registry.svc:5000/openshift/cli
+          name: build
+          script: |
+            #!/usr/bin/env bash
+            echo "---- Trigger Build ----"
+            oc start-build bc/demo-tuesday
+            echo "---- Finished Build ----"
+      workspaces:
+      - name: source
+        workspace: code-clone
+    workspaces:
+    - name: code-clone
+- apiVersion: v1
+  kind: ServiceAccount
+  metadata:
+    labels:
+      template: demo-tuesday
+    name: build-bot
+- apiVersion: rbac.authorization.k8s.io/v1
+  kind: RoleBinding
+  metadata:
+    labels:
+      template: demo-tuesday
+    name: rolebinding-build-bot
+  roleRef:
+    apiGroup: rbac.authorization.k8s.io
+    kind: ClusterRole
+    name: edit
+  subjects:
+  - kind: ServiceAccount
+    name: build-bot
+    namespace: meijerflorent-dev
+- apiVersion: triggers.tekton.dev/v1beta1
+  kind: TriggerBinding
+  metadata:
+    labels:
+      template: demo-tuesday
+    name: demo-tuesday-trigger-binding
+  spec:
+    params:
+    - name: git-repo-url
+      value: $(body.repository.url)
+- apiVersion: triggers.tekton.dev/v1beta1
+  kind: TriggerTemplate
+  metadata:
+    labels:
+      template: demo-tuesday
+    name: demo-tuesday-trigger-template
+  spec:
+    params:
+    - name: git-repo-url
+    resourcetemplates:
+    - apiVersion: tekton.dev/v1beta1
+      kind: PipelineRun
+      metadata:
+        generateName: pipeline-run-
+      spec:
+        params:
+        - name: git-url
+          value: https://github.com/FlorentQuad/test-webhook.git
+        - name: git-branch
+          value: main
+        pipelineRef:
+          name: demo-tuesday
+        podTemplate:
+          securityContext:
+            fsGroup: 65532
+            runAsUser: 1001
+        serviceAccountName: build-bot
+        workspaces:
+        - name: code-clone
+          volumeClaimTemplate:
+            spec:
+              accessModes:
+              - ReadWriteOnce
+              resources:
+                requests:
+                  storage: 1Gi
+- apiVersion: triggers.tekton.dev/v1beta1
+  kind: Trigger
+  metadata:
+    labels:
+      template: demo-tuesday
+    name: demo-tuesday-trigger
+  spec:
+    bindings:
+    - ref: demo-tuesday-trigger-binding
+    interceptors:
+    - params:
+      - name: secretRef
+        value:
+          secretKey: secretToken
+          secretName: github-secret-webhook
+      - name: eventTypes
+        value:
+        - push
+      ref:
+        name: github
+    - params:
+      - name: filter
+        value: body.ref == 'refs/heads/main'
+      ref:
+        name: cel
+    serviceAccountName: pipeline
+    template:
+      ref: demo-tuesday-trigger-template
+- apiVersion: triggers.tekton.dev/v1beta1
+  kind: EventListener
+  metadata:
+    labels:
+      template: demo-tuesday
+    name: demo-tuesday-eventlistener
+  spec:
+    serviceAccountName: pipeline
+    triggers:
+    - triggerRef: demo-tuesday-trigger
+- apiVersion: v1
+  kind: Secret
+  metadata:
+    labels:
+      template: demo-tuesday
+    name: github-secret-webhook
+  stringData:
+    secretToken: QUADSolutions
+  type: Opaque
+- apiVersion: route.openshift.io/v1
+  kind: Route
+  metadata:
+    labels:
+      template: demo-tuesday
+    name: el-demo-tuesday-eventlistener-route
+  spec:
+    port:
+      targetPort: http-listener
+    tls:
+      insecureEdgeTerminationPolicy: None
+      termination: edge
+    to:
+      kind: Service
+      name: el-demo-tuesday-eventlistener
+      weight: 100
+    wildcardPolicy: None
+- apiVersion: image.openshift.io/v1
+  kind: ImageStream
+  metadata:
+    labels:
+      template: demo-tuesday
+    name: demo-tuesday
+  spec:
+    lookupPolicy:
+      local: false
+- apiVersion: build.openshift.io/v1
+  kind: BuildConfig
+  metadata:
+    labels:
+      template: demo-tuesday
+    name: demo-tuesday
+  spec:
+    nodeSelector: null
+    output:
+      to:
+        kind: ImageStreamTag
+        name: demo-tuesday:latest
+    postCommit: {}
+    resources: {}
+    source:
+      git:
+        uri: https://github.com/FlorentQuad/test-webhook
+      type: Git
+    strategy:
+      sourceStrategy:
+        from:
+          kind: ImageStreamTag
+          name: php:8.0-ubi8
+          namespace: openshift
+      type: Source
+    triggers:
+    - github:
+        secret: ic5e8M1Qrniip7BwfduZ
+      type: GitHub
+    - generic:
+        secret: juItEuIQgR0xJVYr-Zmq
+      type: Generic
+    - type: ConfigChange
+    - imageChange: {}
+      type: ImageChange
+- apiVersion: apps/v1
+  kind: Deployment
+  metadata:
+    annotations:
+      image.openshift.io/triggers: '[{"from":{"kind":"ImageStreamTag","name":"demo-tuesday:latest"},"fieldPath":"spec.template.spec.containers[?(@.name==\"demo-tuesday\")].image"}]'
+    labels:
+      template: demo-tuesday
+    name: demo-tuesday
+  spec:
+    replicas: 1
+    selector:
+      matchLabels:
+        deployment: demo-tuesday
+    template:
+      metadata:
+        labels:
+          deployment: demo-tuesday
+      spec:
+        containers:
+        - image: demo-tuesday:latest
+          name: demo-tuesday
+          ports:
+          - containerPort: 8080
+            protocol: TCP
+          - containerPort: 8443
+            protocol: TCP
+- apiVersion: v1
+  kind: Service
+  metadata:
+    labels:
+      template: demo-tuesday
+    name: demo-tuesday
+  spec:
+    ports:
+    - name: 8080-tcp
+      port: 8080
+      protocol: TCP
+      targetPort: 8080
+    - name: 8443-tcp
+      port: 8443
+      protocol: TCP
+      targetPort: 8443
+    selector:
+      deployment: demo-tuesday
+- apiVersion: route.openshift.io/v1
+  kind: Route
+  metadata:
+    labels:
+      template: demo-tuesday
+    name: demo-tuesday
+  spec:
+    port:
+      targetPort: 8080-tcp
+    tls:
+      insecureEdgeTerminationPolicy: None
+      termination: edge
+    to:
+      kind: Service
+      name: demo-tuesday
+      weight: 100
+  wildcardPolicy: None
+kind: List
+metadata: {}

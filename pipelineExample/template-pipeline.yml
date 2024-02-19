@@ -1,0 +1,367 @@
+apiVersion: template.openshift.io/v1
+kind: Template
+metadata:
+  name: pipeline-rvig  
+parameters:
+- name: NAMESPACE
+  value: namespace
+- name: WEBHOOK_BRANCH
+  value: demo-webhook
+- name: WEBHOOK_SECRET
+  value: QUADSolutions
+
+labels:
+  template: pipeline-rvig
+
+objects:
+- apiVersion: tekton.dev/v1beta1
+  kind: Pipeline
+  metadata:
+    name: rvig
+  spec:
+    params:
+    - name: git-url
+      type: string
+    - name: git-branch
+      type: string
+    workspaces:
+    - name: code-clone
+    - name: ssl-creds
+
+    tasks:
+    # fetch-repo
+    - name: fetch-repo
+      taskRef:
+        name: git-clone
+      workspaces:
+      - name: output
+        workspace: code-clone
+      - name: ssl-ca-directory
+        workspace: ssl-creds
+      params:
+      - name: url
+        value: $(params.git-url)
+      - name: revision
+        value: $(params.git-branch)
+      - name: crtFileName
+        value: "ssh-privatekey"
+
+    # gemeentes-simulator
+    - name: gemeentes-simulator
+      runAfter:
+      - fetch-repo
+      workspaces:
+      - name: source
+        workspace: code-clone
+      taskSpec:
+        steps:
+        - name: test
+          image: image-registry.openshift-image-registry.svc:5000/openshift/cli
+          script: |
+            #!/usr/bin/env bash
+            echo "---- Run Tests  ----"
+            
+            echo "=== DUMMY TEST ==="
+            echo "=================="
+            echo "=================="
+            echo "=================="
+            echo "=================="
+            echo "= END DUMMY TEST ="
+            
+            echo "---- Finished Tests ----"
+
+        - name: build
+          image: image-registry.openshift-image-registry.svc:5000/openshift/cli
+          script: |
+            #!/usr/bin/env bash
+            echo "---- Trigger Build: gemeentes-simulator  ----"
+            # oc start-build bc/gemeentes-simulator
+            echo "---- Finished Build ----"
+
+    # rdw-frontend
+    - name: rdw-frontend
+      runAfter:
+      - fetch-repo
+      workspaces:
+      - name: source
+        workspace: code-clone
+      taskSpec:
+        steps:
+        - name: test
+          image: image-registry.openshift-image-registry.svc:5000/openshift/cli
+          script: |
+            #!/usr/bin/env bash
+            echo "---- Run Tests  ----"
+            
+            echo "=== DUMMY TEST ==="
+            echo "=================="
+            echo "=================="
+            echo "=================="
+            echo "=================="
+            echo "= END DUMMY TEST ="
+            
+            echo "---- Finished Tests ----"
+
+        - name: build
+          image: image-registry.openshift-image-registry.svc:5000/openshift/cli
+          script: |
+            #!/usr/bin/env bash
+            echo "---- Trigger Build: rdw-frontend  ----"
+            oc start-build bc/rdw-frontend --build-arg ENDPOINT="https://$(oc get route/gemeentes-simulator -o=go-template="{{ .spec.host  }}")/api/v1"
+            echo "---- Finished Build ----"
+
+    # mijn-overheid
+    - name: mijn-overheid
+      runAfter:
+      - fetch-repo
+      workspaces:
+      - name: source
+        workspace: code-clone
+      taskSpec:
+        steps:
+        - name: test
+          image: image-registry.openshift-image-registry.svc:5000/openshift/cli
+          script: |
+            #!/usr/bin/env bash
+            echo "---- Run Tests  ----"
+            
+            echo "=== DUMMY TEST ==="
+            echo "=================="
+            echo "=================="
+            echo "=================="
+            echo "=================="
+            echo "= END DUMMY TEST ="
+            
+            echo "---- Finished Tests ----"
+
+        - name: build
+          image: image-registry.openshift-image-registry.svc:5000/openshift/cli
+          script: |
+            #!/usr/bin/env bash
+            echo "---- Trigger Build: mijn-overheid  ----"
+            # oc start-build bc/mijn-overheid
+            echo "---- Finished Build ----"
+    
+    # rvig-message-system
+    - name: rvig-message-system
+      runAfter:
+      - fetch-repo
+      workspaces:
+      - name: source
+        workspace: code-clone
+      taskSpec:
+        steps:
+        - name: test
+          image: image-registry.openshift-image-registry.svc:5000/openshift/cli
+          script: |
+            #!/usr/bin/env bash
+            echo "---- Run Tests  ----"
+            
+            echo "=== DUMMY TEST ==="
+            echo "=================="
+            echo "=================="
+            echo "=================="
+            echo "=================="
+            echo "= END DUMMY TEST ="
+            
+            echo "---- Finished Tests ----"
+
+        - name: build
+          image: image-registry.openshift-image-registry.svc:5000/openshift/cli
+          script: |
+            #!/usr/bin/env bash
+            echo "---- Trigger Build: rvig-message-system  ----"
+            # oc start-build bc/rvig-message-system
+            echo "---- Finished Build ----"
+
+    finally: 
+    - name: final
+      taskSpec:
+        steps:
+        - image: image-registry.openshift-image-registry.svc:5000/openshift/cli
+          script: |
+            #!/usr/bin/env bash
+            
+            echo "Everything Finished"
+
+- apiVersion: v1
+  kind: ServiceAccount
+  metadata:
+    name: build-bot 
+  secrets:
+    - name: quad-gh-secret
+
+- apiVersion: rbac.authorization.k8s.io/v1
+  kind: Role
+  metadata:
+    name: role-build-bot
+    namespace: ${NAMESPACE}
+  rules:
+  - apiGroups:
+    - build.openshift.io
+    resources:
+    - buildconfigs
+    verbs:
+    - create
+  - apiGroups:
+    - route.openshift.io
+    resources:
+    - routes
+    verbs:
+    - list
+
+- apiVersion: rbac.authorization.k8s.io/v1
+  kind: RoleBinding
+  metadata:
+    name: rolebinding-build-bot
+  roleRef:
+    apiGroup: rbac.authorization.k8s.io
+    kind: ClusterRole
+    name: edit
+  subjects:
+  - kind: ServiceAccount
+    name: build-bot
+    namespace: ${NAMESPACE}
+
+- apiVersion: triggers.tekton.dev/v1beta1
+  kind: TriggerBinding
+  metadata:
+    name: rvig-trigger-binding
+  spec:
+    params:
+    - name: git-repo-url
+      value: $(body.repository.url)
+    - name: git-revision
+      value: $(body.head_commit.id)
+
+- apiVersion: triggers.tekton.dev/v1beta1
+  kind: TriggerTemplate
+  metadata:
+    name: rvig-trigger-template
+  spec:
+    params:
+    - name: git-repo-url
+    - name: git-revision
+    resourcetemplates:
+    - apiVersion: tekton.dev/v1beta1
+      kind: PipelineRun
+      metadata:
+        generateName: pipeline-run-
+      spec:
+        serviceAccountName: build-bot
+        pipelineRef:
+          name: rvig
+        podTemplate:
+          securityContext:
+            fsGroup: 65532
+            runAsUser: 1001
+        workspaces:
+        - name: code-clone
+          volumeClaimTemplate:
+            spec:
+              accessModes:
+              - ReadWriteOnce
+              resources:
+                requests:
+                  storage: 1Gi
+        - name: ssl-creds
+          secret:
+            secretName: quad-gh-secret
+        params:
+        - name: git-url
+          value: git@github.com:quad-teams/RvIG-berichtendienst.git
+          # value: $(tt.params.git-repo-url)
+        - name: git-branch
+          value: openshift-deploy
+          # value: $(tt.params.git-revision)
+      
+- apiVersion: triggers.tekton.dev/v1beta1
+  kind: Trigger
+  metadata:
+    name: rvig-trigger
+  spec:
+    serviceAccountName: pipeline
+    interceptors:
+      - ref:
+          name: "github"
+        params:
+          - name: "secretRef"
+            value:
+              secretName: github-secret-webhook
+              secretKey: secretToken
+          - name: "eventTypes"
+            value: ["push"]
+      - ref:
+          name: "cel"
+        params:
+          - name: "filter"
+            value: body.ref == 'refs/heads/${WEBHOOK_BRANCH}'
+    bindings:
+      - ref: rvig-trigger-binding
+    template:
+      ref: rvig-trigger-template
+
+- apiVersion: triggers.tekton.dev/v1beta1
+  kind: EventListener
+  metadata:
+    name: rvig-eventlistener
+  spec:
+    serviceAccountName: pipeline
+    triggers:
+      - triggerRef: rvig-trigger
+      
+- apiVersion: v1
+  kind: Secret
+  metadata:
+    name: github-secret-webhook
+  type: Opaque
+  stringData:
+    secretToken: ${WEBHOOK_SECRET}
+
+- apiVersion: route.openshift.io/v1
+  kind: Route
+  metadata:
+    labels:
+      template: pipeline-rvig
+    name: el-rvig-eventlistener-route
+  spec:
+    port:
+      targetPort: http-listener
+    tls:
+      insecureEdgeTerminationPolicy: None
+      termination: edge
+    to:
+      kind: Service
+      name: el-rvig-eventlistener
+      weight: 100
+    wildcardPolicy: None
+
+# - apiVersion: tekton.dev/v1beta1
+#   kind: PipelineRun
+#   metadata:
+#     name: pipeline-run-test
+#   spec:
+#     serviceAccountName: build-bot
+#     pipelineRef:
+#       name: rvig
+#     podTemplate:
+#       securityContext:
+#         fsGroup: 65532
+#         runAsUser: 1001
+#     workspaces:
+#     - name: code-clone
+#       volumeClaimTemplate:
+#         spec:
+#           accessModes:
+#           - ReadWriteOnce
+#           resources:
+#             requests:
+#               storage: 1Gi
+#     - name: ssl-creds
+#       secret:
+#         secretName: quad-gh-secret
+#     params:
+#     - name: git-url
+#       value: git@github.com:quad-teams/RvIG-berichtendienst.git
+#     - name: git-branch
+#       value: openshift-deploy
